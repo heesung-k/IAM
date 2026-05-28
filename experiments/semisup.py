@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
-import wandb
 from torch.amp import autocast, GradScaler
 
 torch.set_float32_matmul_precision("high")
@@ -35,11 +34,9 @@ def evaluate(model):
 
 @torch.no_grad()
 def update_ema_model(src_model, ema_model, decay: float):
-    # 1) 파라미터는 EMA
     for p_ema, p in zip(ema_model.parameters(), src_model.parameters()):
         p_ema.data.mul_(decay).add_(p.data, alpha=1.0 - decay)
 
-    # 2) 버퍼(BN running_mean/var, num_batches_tracked 등)는 '복사'
     for b_ema, b in zip(ema_model.buffers(), src_model.buffers()):
         b_ema.copy_(b)
 
@@ -68,23 +65,6 @@ if __name__ == "__main__":
         print("AMP requested but CUDA is unavailable; running in full precision.")
     amp_enabled = args.amp and device == "cuda"
     autocast_device = "cuda" if device == "cuda" else "cpu"
-    wandb.init(
-        entity="muwonijr-hanyang-university",
-        project="IAM",
-        # id="rd4e38wk",
-        name=args.optimizer+"_FixMatch_EMA",
-        config={
-            "learning_rate": args.lr,
-            "architecture": "WRN-28-2",
-            "dataset": args.dataset,
-            "epochs": args.epochs,
-            "optimizer": args.optimizer,
-            "dropout": args.dropout,
-            "ascent": args.ascent,
-            "batch_size": args.batch_size,
-            "seed": args.seed,
-            "num_labeled": args.num_labeled,
-        })
 
     loader_kwargs = dict(
         batch_size=args.batch_size,
@@ -119,13 +99,6 @@ if __name__ == "__main__":
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=2**20)
     scaler = GradScaler(enabled=amp_enabled)
 
-    # checkpoint_path = "./checkpoints/IAM-D_epoch500_seed1.pth"
-    # checkpoint = torch.load(checkpoint_path)
-    # model.load_state_dict(checkpoint['model_state_dict'])
-    # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
-    # start_epoch = checkpoint['epoch']
-
     steps_per_epoch = 1024
     lambda_u = 1
     threshold = 0.95
@@ -136,7 +109,6 @@ if __name__ == "__main__":
     rho = args.ascent
 
     for epoch in range(args.epochs):
-    # for epoch in range(start_epoch, args.epochs):
         model.train()
         labeled_iter = iter(labeled_loader)
         unlabeled_iter = iter(unlabeled_loader)
@@ -210,14 +182,12 @@ if __name__ == "__main__":
 
             if (step + 1) % 128 == 0:
                 chunk_duration = time.time() - chunk_timer
-                wandb.log({"chunk_128_time_s": chunk_duration}, step=global_step)
                 chunk_timer = time.time()
         
         avg_loss = total_loss / steps_per_epoch
         
         acc_model = evaluate(model)
         acc_ema   = evaluate(ema_model)
-        wandb.log({"acc_model": acc_model, "acc_ema": acc_ema}, step=global_step)
         if epoch + 1 == 450:
             rho *= 0.5
 
